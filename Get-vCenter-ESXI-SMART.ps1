@@ -3,7 +3,7 @@
 
 $reportFileName = [System.Environment]::GetFolderPath("Desktop") + "\$env:USERDOMAIN-SMART-$((Get-Date).ToString("dd-MM-yyyy")).csv" 
 $csvParamArr = @('ClusterName','ESXiName','CanonicalName','CapacityGB','Model','Revision')
-$smartParamArr = @('Read Error Count','Write Error Count','Drive Temperature','Reallocated Sector Count','Media Wearout Indicator','Health Status')
+$smartParamArr = @('Read Error Count','Write Error Count','Drive Temperature','Reallocated Sector Count','Media Wearout Indicator','Power Cycle Count','Health Status')
 $csvRowArr = @()
 Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:$false | Out-Null 
 $inputVC = Read-Host "Please enter vCenter Name(if multiple separate with a comma)"
