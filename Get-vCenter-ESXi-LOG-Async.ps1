@@ -175,12 +175,11 @@ $ScriptGetVMKernelLogs = {
             $datacenterName = $datacenter      
         }
         
-        if($null -eq $cluster)
-        {
+        if($null -eq $cluster) {
             Write-Warning 'GetVMKernelLogs: cluster is NULL'
             $clusterName = ''
         }
-        if($cluster -is [VMware.VimAutomation.ViCore.Impl.V1.Inventory.ClusterImpl] -or $cluster -is [VMware.Vim.ClusterComputeResource]) {
+        elseif($cluster -is [VMware.VimAutomation.ViCore.Impl.V1.Inventory.ClusterImpl] -or $cluster -is [VMware.Vim.ClusterComputeResource]) {
             $clusterName = $cluster.Name
         }
         elseif ($esxi -is [string]) {
@@ -354,12 +353,21 @@ function CloseRunspacePool($runspacePool) {
     }
 }
 
-function CreateTask([string] $taskId, [scriptblock]$scriptBlock,[array]$argumentArr) {
+function CreateTask([string] $taskId, [System.Management.Automation.Runspaces.RunspacePool]$runspacePool, [scriptblock]$scriptBlock,[array]$argumentArr) {
+
+    if([string]::IsNullOrEmpty( $taskId)) {
+        Write-Warning 'CreateTask: taskId is NULL'
+        return $null
+    }
+    if($null -eq $runspacePool) {
+        Write-Warning 'CreateTask: runspacePool is NULL'
+        return $null
+    }
     if($null -eq $scriptBlock) {
         Write-Warning 'CreateTask: scriptBlock is NULL'
         return $null
     }
-    if($null -eq $scriptBlock) {
+    if($null -eq $argumentArr) {
         Write-Warning 'CreateTask: ArgumentArr is NULL'
         return $null
     }
@@ -412,7 +420,7 @@ function RetrieveAndProcessLogs($vCenterId,[DateTime] $dateBegin,[DateTime] $dat
                     $logVmKernelArr = @()
                     Write-Host "     ++  ESXI: "$esxi.Name  
 
-                    $powerShellTaskCustomObject = CreateTask $esxi.Name $ScriptGetVMKernelLogs @($vCenterId,$datacenter,$clusterEsxi,$esxi,$dateBegin,$dateEnd,"")
+                    $powerShellTaskCustomObject = CreateTask $esxi.Name $runspacePool $ScriptGetVMKernelLogs @($vCenterId,$datacenter,$clusterEsxi,$esxi,$dateBegin,$dateEnd,"")
                     if($powerShellTaskCustomObject) {
                         $runspaceTaskArr += $powerShellTaskCustomObject
                     }
@@ -422,7 +430,7 @@ function RetrieveAndProcessLogs($vCenterId,[DateTime] $dateBegin,[DateTime] $dat
             $standaloneEsxiArr =  Get-View -Server $vCenterId -ViewType HostSystem -Property Name,Parent  -SearchRoot $datacenter.MoRef  | Where-Object { $_.Parent -notmatch '^Cluster.*' }
             foreach ($standaloneEsxi in $standaloneEsxiArr) {
                 Write-Host " -- Standalone ESXi Name: "$standaloneEsxi.Name
-                $powerShellTaskCustomObject = CreateTask $standaloneEsxi.Name $ScriptGetVMKernelLogs @($vCenterId,$datacenter,$null,$standaloneEsxi,$dateBegin,$dateEnd,"")
+                $powerShellTaskCustomObject = CreateTask $standaloneEsxi.Name $runspacePool $ScriptGetVMKernelLogs @($vCenterId,$datacenter,$null,$standaloneEsxi,$dateBegin,$dateEnd,"")
                 if($powerShellTaskCustomObject) {
                     $runspaceTaskArr += $powerShellTaskCustomObject
                 }
@@ -495,6 +503,3 @@ foreach($vCenterServerName in $vCenterServerNameArr)
     # Disconnect from vCenter
     DisconnectFromVCenter $vCenterId
 }
-
-
-
