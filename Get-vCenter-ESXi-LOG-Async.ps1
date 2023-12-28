@@ -1,16 +1,16 @@
 # Dmitriy
-# Version: 3
+# Version: 4
 # Date: 2023-Dec
 
 $throttleLimit = 6
-$timeoutMilliseconds = 60000
+$timeoutMilliseconds = 90000
 
 
 # Setting PowerCLI configurations
 try {
     if (-not (Get-Module -Name VMware.VimAutomation.Core -ListAvailable)) { 
         Import-Module VMware.VimAutomation.Core 
-        Start-Sleep 500
+        Start-Sleep -Milliseconds 500
     }
     else
     {
@@ -21,8 +21,7 @@ try {
     Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:$false -ErrorAction Stop | Out-Null
 }
 catch {
-    Write-Error "Failed to set PowerCLI configurations"
-    Write-Error $_
+    Write-Error "Failed to set PowerCLI configurations: $_"
 }
 
 function ConnectToVCenter([string] $vCenterServerName) {
@@ -30,15 +29,21 @@ function ConnectToVCenter([string] $vCenterServerName) {
 	if([string]::IsNullOrWhiteSpace($vCenterServerName)) {
         Write-Warning 'ConnectToVCenter: vCenterServerName is NULL on Empty'
     }
-    [string]$vmCommands = Get-Command -Module VMware.VimAutomation.Core | 
-                            Select-Object -ExpandProperty Name | 
-                            Where-Object {$_ -eq 'Connect-VIServer'}
-    if([string]::IsNullOrEmpty($vmCommands))
-    {
-        Import-Module VMware.VimAutomation.Core | Out-Null
-        Start-Sleep 500
-    }
 
+    try {
+        [string]$vmCommands = Get-Command -Module VMware.VimAutomation.Core | 
+                                Select-Object -ExpandProperty Name | 
+                                Where-Object {$_ -eq 'Connect-VIServer'}
+        if([string]::IsNullOrEmpty($vmCommands))
+        {
+            Import-Module VMware.VimAutomation.Core | Out-Null
+            Start-Sleep -Milliseconds 500
+        }
+    }
+    catch {
+        Write-Error "ConnectToVCenter: Not found Connect-VIServer: $_"
+        return $null
+    }
     $currentConnection = $global:DefaultVIServer | Where-Object { $_.Name -eq $vCenterServerName }
     if($currentConnection.IsConnected) {
         Write-Host "ConnectToVCenter: Used Connection from global:DefaultVIServers" $global:DefaultVIServer.Name  -ForegroundColor Green
@@ -49,8 +54,7 @@ function ConnectToVCenter([string] $vCenterServerName) {
         $vCenterId =  Connect-VIServer $vCenterServerName  -ErrorAction Stop -WarningAction SilentlyContinue 
     }
     catch {
-        Write-Error "ConnectToVCenter: Connect-VIServer $vCenterServerName Error"
-        Write-Error $_
+        Write-Error "ConnectToVCenter: Connect-VIServer $vCenterServerName Error: $_"
         return $null
     }
 
@@ -76,12 +80,11 @@ function DisconnectFromVCenter($vCenterId) {
     }
     try {
         Disconnect-VIServer $vCenterId -Confirm:$false -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Out-Null 
-        Start-Sleep -Seconds 5
+        Start-Sleep -Milliseconds 3000
         Write-Host -ForegroundColor Green "DisconnectFromVCenter: Connected closed" $vCenterId
     }
     catch {
-        Write-Warning "DisconnectFromVCenter: Warning for vCenterId=$vCenterId"
-        Write-Warning $_
+        Write-Warning "DisconnectFromVCenter: Warning for vCenterId=$vCenterId, $_"
     }
 }
 
@@ -95,12 +98,7 @@ $ScriptGetVMKernelLogs = {
     [DateTime] $dateEnd,
     [string] $notMatch = ""
     )
-    [string]$vmCommands = Get-Command -Module VMware.VimAutomation.Core | Select-Object -ExpandProperty Name | Where-Object {$_ -eq 'Get-Log'}
-    if([string]::IsNullOrEmpty($vmCommands))
-    {
-        Import-Module VMware.VimAutomation.Core | Out-Null
-        Start-Sleep 500
-    }
+
 
     function GetMatchDate([DateTime] $dateBegin,[DateTime] $dateEnd) {
         $matchDateArr = @()
@@ -165,14 +163,28 @@ $ScriptGetVMKernelLogs = {
             return $logVmKernelArr
         }
 
-        if($null -ne $datacenter) {
+        if($null -eq $datacenter)
+        {
+            Write-Warning 'GetVMKernelLogs: datacenter is NULL'
+            $datacenterName = ''
+        }
+        elseif($datacenter -is [VMware.VimAutomation.ViCore.Impl.V1.Inventory.DatacenterImpl] -or $datacenter -is [VMware.Vim.Datacenter]) {
             $datacenterName = $datacenter.Name
-            Write-Verbose "      GetVMKernelLogs: $datacenterName $($datacenter.GetType().FullName)" -Verbose
+        }
+        elseif ($esxi -is [string]) {
+            $datacenterName = $datacenter      
         }
         
-        if($null -ne $cluster) {
+        if($null -eq $cluster)
+        {
+            Write-Warning 'GetVMKernelLogs: cluster is NULL'
+            $clusterName = ''
+        }
+        if($cluster -is [VMware.VimAutomation.ViCore.Impl.V1.Inventory.ClusterImpl] -or $cluster -is [VMware.Vim.ClusterComputeResource]) {
             $clusterName = $cluster.Name
-            Write-Verbose "      GetVMKernelLogs: $clusterName $($cluster.GetType().FullName)" -Verbose
+        }
+        elseif ($esxi -is [string]) {
+            $clusterName = $cluster      
         }
 
         if($null -eq $esxi) {
@@ -189,6 +201,18 @@ $ScriptGetVMKernelLogs = {
 	    else {
             Write-Warning 'GetVMKernelLogs: esxi not supported data type:' $esxi.GetType().FullName
             return $logVmKernelArr
+        }
+
+        try {
+            [string]$vmCommands = Get-Command -Module VMware.VimAutomation.Core | Select-Object -ExpandProperty Name | Where-Object {$_ -eq 'Get-Log'}
+            if([string]::IsNullOrEmpty($vmCommands))
+            {
+                Import-Module VMware.VimAutomation.Core | Out-Null
+                Start-Sleep -Milliseconds 500
+            }
+        }
+        catch {
+            Write-Error "GetVMKernelLogs: Not found Get-Log: $_"
         }
 
         $matchDateString = GetMatchDate $dateBegin $dateEnd 
@@ -448,7 +472,7 @@ function GenerateCsvReport($RowArr,[string] $FileName) {
 
 # Main script logic
 
-$dateBegin =  (Get-Date).AddDays(-6)
+$dateBegin =  (Get-Date).AddDays(-2)
 $dateEnd =  (Get-Date)
 $inputVC = Read-Host 'Please enter vCenter Name (if multiple separate with a comma)'
 $vCenterServerNameArr = ($inputVC.Split(',')).Trim()
