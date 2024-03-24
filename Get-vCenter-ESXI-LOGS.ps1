@@ -1,6 +1,6 @@
 # Dmitriy
-# Version: 2
-# Date: 2023-Dec
+# Version: 3
+# Date: 2024-Mar
 
 # Setting PowerCLI configurations
 try {
@@ -69,7 +69,7 @@ function GetMatchDate([DateTime] $dateBegin,[DateTime] $dateEnd) {
 
     if($null -eq $dateBegin) { 
         Write-Warning 'GetMatchDate: dateBegin is NULL setup default value -1 day'
-        $dateBegin =  (Get-Date).AddDays(-1)
+        $dateBegin =  (Get-Date).AddDays(-2)
     }
     if($null -eq $dateEnd) {
         Write-Warning 'GetMatchDate: dateEnd is NULL setup default value current day'
@@ -150,6 +150,7 @@ function ConvertVMKernelLogToCsvRow([string] $logVmKernel, [string] $vCenterName
     if($rx.IsMatch($logVmKernel)) {
         [DateTime] $dt = $rx.Match($logVmKernel).Value 
     }
+
     $csvRow =  [pscustomobject]@{
             vCenterServer = $vCenterName
             Datacenter    = $datacenterName
@@ -157,6 +158,10 @@ function ConvertVMKernelLogToCsvRow([string] $logVmKernel, [string] $vCenterName
             Host          = $esxiName
             DateTime      = $dt
             Message       = $logVmKernel -replace '^.*WARNING:(\s*)'                               
+    }
+    if($dt -gt (Get-Date).AddHours(-1))
+    {
+        Write-Host $csvRow 
     }
     return $csvRow
 }
@@ -190,7 +195,7 @@ function RetrieveAndProcessLogs($vCenterId,[DateTime] $dateBegin,[DateTime] $dat
                     $logVmKernelArr = GetVMKernelLogs $vCenterId $esxi $dateBegin  $dateEnd 
                     foreach($logVmKernel in $logVmKernelArr)
                     {
-                        $csvRowArr +=  ConvertVMKernelLogToCsvRow $logVmKernel $WorkTime $vCenterId.Name $datacenter.Name $clusterEsxi.Name $esxi.Name 
+                        $csvRowArr +=  ConvertVMKernelLogToCsvRow $logVmKernel  $vCenterId.Name $datacenter.Name $clusterEsxi.Name $esxi.Name 
                     } 
                 }).TotalSeconds, 2) 
                 Write-Host $esxi.Name "TOTAL WorkTime = $totalWorkTime" -ForegroundColor Gray
@@ -204,7 +209,7 @@ function RetrieveAndProcessLogs($vCenterId,[DateTime] $dateBegin,[DateTime] $dat
                     $logVmKernelArr = GetVMKernelLogs $vCenterId $standaloneEsxi $dateBegin  $dateEnd 
                     foreach($logVmKernel in $logVmKernelArr)
                     {
-                        $csvRowArr +=  ConvertVMKernelLogToCsvRow $logVmKernel $WorkTime $vCenterId.Name $datacenter.Name $clusterEsxi.Name $standaloneEsxi.Name 
+                        $csvRowArr +=  ConvertVMKernelLogToCsvRow $logVmKernel  $vCenterId.Name $datacenter.Name $clusterEsxi.Name $standaloneEsxi.Name 
                     } 
                 }).TotalSeconds, 2) 
                 Write-Host $standaloneEsxi.Name "TOTAL WorkTime = $totalWorkTime" -ForegroundColor Gray
@@ -225,7 +230,13 @@ function GenerateCsvReport($RowArr,[string] $FileName) {
     }
     if($RowArr -is [array]) {
         if($RowArr.Count -gt 0) {
+            try {
             $RowArr | Export-Csv -Path $FileName -NoTypeInformation -Force
+                Write-Host "GenerateCsvReport:Saved To: $FileName" -ForegroundColor Green
+            }
+            catch{
+                Write-Host "GenerateCsvReport:Warning To save: $FileName"  -ForegroundColor Yellow
+            }
         }
         else {
             Write-Warning 'GenerateCsvReport: RowArr.Count = 0'
