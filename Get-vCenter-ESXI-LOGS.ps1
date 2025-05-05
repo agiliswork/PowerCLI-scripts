@@ -1,50 +1,94 @@
 # Dmitriy
-# Version: 3
+# Version: 4
 # Date: 2024-Mar
 
-# Setting PowerCLI configurations
-try {
-    Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP $false -Confirm:$false -ErrorAction Stop | Out-Null
-    Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:$false -ErrorAction Stop | Out-Null
-}
-catch {
-    Write-Error "Failed to set PowerCLI configurations"
-    Write-Error $_
-}
+$dateBegin =  (Get-Date).AddDays(-2)
+$dateEnd =  (Get-Date)
+$strNotMatch = 'faultDomain.*changed|LSOM_ReleaseComponent|VsanSparse hierarchy'
+$reportFileName = [System.Environment]::GetFolderPath("Desktop") + "\$vCenterServerName-LOGS-$((Get-Date).ToString("dd-MM-yyyy")).csv" 
 
-function ConnectToVCenter([string] $vCenterServerName) {
-    $vCenterId = $null
-	if([string]::IsNullOrWhiteSpace($vCenterServerName)) {
-        Write-Warning 'ConnectToVCenter: vCenterServerName is NULL on Empty'
-    }
-    $currentConnection = $global:DefaultVIServer | Where-Object { $_.Name -eq $vCenterServerName }
-    if($currentConnection.IsConnected) {
-        Write-Host "ConnectToVCenter: Used Connection from global:DefaultVIServers" $global:DefaultVIServer.Name  -ForegroundColor Green
-        return $currentConnection
+function ConnectToVCenter{
+       param (
+        [Parameter(Mandatory=$true)]
+        [Alias("Server")] 
+        [string]$vCenterServerName,
+        [System.Management.Automation.PSCredential]$credential = $null
+    )
+
+
+    if ([string]::IsNullOrWhiteSpace($vCenterServerName)) {
+        Write-Warning 'ConnectToVCenter: vCenterServerName is NULL or Empty'
     }
 
+    if (-not (Get-Command -Name 'Connect-VIServer' -ErrorAction SilentlyContinue)) {
+        try {
+																											  
+            Import-Module VMware.VimAutomation.Core -Global -ErrorAction Stop
+            Start-Sleep -Milliseconds 1000
+        }
+        catch {
+            Write-Error "ConnectToVCenter: Unable to import VMware.VimAutomation.Core module: $_"
+        }
+    }
+    
+    Write-Host (Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue | Format-List -Property Name,Path,Version | Out-String) -ForegroundColor Green 
+
+    Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP          $false -Confirm:$false -ErrorAction Stop | Out-Null
+    Set-PowerCLIConfiguration -Scope Session -InvalidCertificateAction   Ignore -Confirm:$false -ErrorAction Stop | Out-Null
+    Set-PowerCLIConfiguration -Scope Session -DefaultVIServerMode        Single -Confirm:$false -ErrorAction Stop | Out-Null
+    Set-PowerCLIConfiguration -Scope Session -WebOperationTimeoutSeconds 1800   -Confirm:$false -ErrorAction Stop | Out-Null
+
+    Write-Host "PowerCLIConfiguration:$(Get-PowerCLIConfiguration -Scope Session | Format-List | Out-String )" -ForegroundColor Green
     try {
-        $vCenterId =  Connect-VIServer $vCenterServerName  -ErrorAction Stop -WarningAction SilentlyContinue 
+        if ($credential) {
+            $currentConnection = $global:DefaultVIServer | Where-Object { $_.Name -eq $vCenterServerName -and $_.User -match $credential.UserName }
+
+            if ($currentConnection.IsConnected) {
+                Write-Host "ConnectToVCenter: Used Connection from global:DefaultVIServers $($currentConnection.Name)" -ForegroundColor Green
+                return $currentConnection
+            }
+
+            $vCenterId =  Connect-VIServer $vCenterServerName -Credential $credential -ErrorAction Stop -WarningAction SilentlyContinue
+            Write-Host "ConnectToVCenter: Credential $($credential.GetType().FullName) $($credential.UserName)"
+        } 
+        else {
+            $currentConnection = $global:DefaultVIServer | Where-Object { $_.Name -eq $vCenterServerName -and $_.User -match $env:USERNAME }
+
+            if ($currentConnection.IsConnected) {
+                Write-Host "ConnectToVCenter: Used Connection from global:DefaultVIServer $($global:DefaultVIServer.Name)" -ForegroundColor Green
+                return $currentConnection
+            }
+
+            $vCenterId =  Connect-VIServer $vCenterServerName -ErrorAction Stop -WarningAction SilentlyContinue
+        } 
     }
-    catch {
-        Write-Error "ConnectToVCenter: Connect-VIServer $vCenterServerName Error"
-        Write-Error $_
+    catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
+        Write-Warning "ConnectToVCenter: Invalid credentials or access denied, Error: $_"
         return $null
     }
-
-    if($null -eq $vCenterId) {
-    	Write-Warning 'ConnectToVCenter: vCenterId is NULL'
-	    return $null
+    catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
+        Write-Warning "ConnectToVCenter: Invalid server name or ip, Error: $_"
+        return $null
+    }
+    catch {
+        Write-Error "ConnectToVCenter: Connect-VIServer $vCenterServerName Error: $_"
+        return $null		
     }
 
-	if($vCenterId.IsConnected) {
-		Write-Host 'ConnectToVCenter:' $vCenterId.Name  ', Connection status:'$vCenterId.IsConnected  ', Type: ' $vCenterId.GetType().FullName -ForegroundColor Green
-		return $vCenterId
-	}
-	else {
-		Write-Warning 'ConnectToVCenter: Not Connected'
-		return $null
-	}
+    if ($null -eq $vCenterId) {
+        Write-Warning 'ConnectToVCenter: vCenterId is NULL'
+				 
+    }
+
+    if ($vCenterId.IsConnected) {
+        $vcPropertyArr = @("Name", "User", "Version", "Build", "IsConnected", "Id", "ServiceUri", "Port")
+        Write-Host "ConnectToVCenter: $($vCenterId | Format-List -Property $vcPropertyArr | Out-String )" -ForegroundColor Green
+        return $vCenterId
+    }
+    else {
+        Write-Warning 'ConnectToVCenter: Not Connected' -ForegroundColor Yellow
+        return $null
+    }
 }
 
 function DisconnectFromVCenter($vCenterId) {
@@ -145,7 +189,7 @@ function GetVMKernelLogs($vCenterId,$esxi,[DateTime] $dateBegin,[DateTime] $date
 
 
 function ConvertVMKernelLogToCsvRow([string] $logVmKernel, [string] $vCenterName, [string]$datacenterName, [string]$clusterName, [string]$esxiName) {
-    [Regex]$rx = '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z'
+    [regex]$rx = "^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(.\d{3})?Z"
     $dt = Get-Date
     if($rx.IsMatch($logVmKernel)) {
         [DateTime] $dt = $rx.Match($logVmKernel).Value 
@@ -166,7 +210,7 @@ function ConvertVMKernelLogToCsvRow([string] $logVmKernel, [string] $vCenterName
     return $csvRow
 }
 
-function RetrieveAndProcessLogs($vCenterId,[DateTime] $dateBegin,[DateTime] $dateEnd) {
+function RetrieveAndProcessLogs($vCenterId,[DateTime] $dateBegin,[DateTime] $dateEnd,[string] $notMatch='') {
     $csvRowArr = @()
     if($null -eq $vCenterId) {
         Write-Warning 'RetrieveAndProcessLogs: vCenterId is NULL'
@@ -192,7 +236,7 @@ function RetrieveAndProcessLogs($vCenterId,[DateTime] $dateBegin,[DateTime] $dat
                 $logVmKernelArr = @()
                 Write-Host "     ++  ESXI: "$esxi.Name  
                 $totalWorkTime = [math]::round((Measure-Command { 
-                    $logVmKernelArr = GetVMKernelLogs $vCenterId $esxi $dateBegin  $dateEnd 
+                    $logVmKernelArr = GetVMKernelLogs $vCenterId $esxi $dateBegin  $dateEnd $notMatch
                     foreach($logVmKernel in $logVmKernelArr)
                     {
                         $csvRowArr +=  ConvertVMKernelLogToCsvRow $logVmKernel  $vCenterId.Name $datacenter.Name $clusterEsxi.Name $esxi.Name 
@@ -206,7 +250,7 @@ function RetrieveAndProcessLogs($vCenterId,[DateTime] $dateBegin,[DateTime] $dat
         foreach ($standaloneEsxi in $standaloneEsxiArr) {
             Write-Host " -- Standalone ESXi Name: "$standaloneEsxi.Name
                 $totalWorkTime = [math]::round((Measure-Command { 
-                    $logVmKernelArr = GetVMKernelLogs $vCenterId $standaloneEsxi $dateBegin  $dateEnd 
+                    $logVmKernelArr = GetVMKernelLogs $vCenterId $standaloneEsxi $dateBegin  $dateEnd $notMatch
                     foreach($logVmKernel in $logVmKernelArr)
                     {
                         $csvRowArr +=  ConvertVMKernelLogToCsvRow $logVmKernel  $vCenterId.Name $datacenter.Name $clusterEsxi.Name $standaloneEsxi.Name 
@@ -251,8 +295,7 @@ function GenerateCsvReport($RowArr,[string] $FileName) {
 
 # Main script logic
 
-$dateBegin =  (Get-Date).AddDays(-2)
-$dateEnd =  (Get-Date)
+
 
 $inputVC = Read-Host 'Please enter vCenter Name (if multiple separate with a comma)'
 $vCenterServerNameArr = ($inputVC.Split(',')).Trim()
@@ -260,7 +303,6 @@ $vCenterServerNameArr = ($inputVC.Split(',')).Trim()
 foreach($vCenterServerName in $vCenterServerNameArr) 
 {
     $csvRowArr = @()
-    $reportFileName = [System.Environment]::GetFolderPath("Desktop") + "\$vCenterServerName-LOGS-$((Get-Date).ToString("dd-MM-yyyy")).csv" 
     $vCenterId = ConnectToVCenter $vCenterServerName
 
     if ($null -eq $vCenterId) {
@@ -269,7 +311,7 @@ foreach($vCenterServerName in $vCenterServerNameArr)
     } 
 
     # Retrieve logs and process
-    $csvRowArr += RetrieveAndProcessLogs $vCenterId $dateBegin $dateEnd
+    $csvRowArr += RetrieveAndProcessLogs $vCenterId $dateBegin $dateEnd $strNotMatch
     # Generate report
     GenerateCsvReport $csvRowArr $reportFileName
     # Disconnect from vCenter
